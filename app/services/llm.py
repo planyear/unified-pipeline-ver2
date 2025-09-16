@@ -69,7 +69,7 @@ def _log_usage(resp_json: Dict[str, Any], resp_headers: requests.structures.Case
 
 def chat_completion(
     messages: List[Dict[str, Any]],
-    temperature: float = 0.2,
+    temperature: float = 0, #top p = 0, topk = 250, reasoning turned off, output tokens = 64000
     request_overrides: Optional[Dict[str, Any]] = None,
     return_full: bool = True,
 ):
