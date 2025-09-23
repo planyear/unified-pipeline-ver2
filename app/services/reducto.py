@@ -1,8 +1,9 @@
 # app/services/reducto.py
 import time
+import json
 import logging
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Tuple
 
 import requests
 from fastapi import HTTPException
@@ -14,6 +15,48 @@ logger = logging.getLogger("pipeline")
 # -----------------------------
 # Reducto: PDF → Markdown/Text
 # -----------------------------
+
+def _log_reducto_summary(pj: dict) -> None:
+    """Log a compact summary of the Reducto response (no full JSON)."""
+    data = pj.get("data") or {}
+    usage = pj.get("usage") or data.get("usage") or {}
+    logger.info(
+        "Reducto summary | job_id=%s duration=%s pages=%s credits=%s",
+        pj.get("job_id") or data.get("job_id"),
+        pj.get("duration") or data.get("duration"),
+        usage.get("num_pages"),
+        usage.get("credits"),
+    )
+
+def _result_to_page_marked_text(pj: dict) -> Optional[str]:
+    """
+    Turn result.chunks into:
+      [START OF PAGE 1]
+      ...page text...
+      [END OF PAGE 1]
+    Assumes chunking by page. Uses 'embed' first, then 'content'.
+    """
+    res = pj.get("result") or (pj.get("data") or {}).get("result")
+    if not isinstance(res, dict):
+        return None
+    chunks = res.get("chunks")
+    if not isinstance(chunks, list) or not chunks:
+        return None
+
+    parts = []
+    for idx, ch in enumerate(chunks, start=1):
+        if not isinstance(ch, dict):
+            continue
+        text = (ch.get("embed") or ch.get("content") or "").strip()
+        if not text:
+            continue
+        parts.append(f"[START OF PAGE {idx}]")
+        parts.append(text)
+        parts.append(f"[END OF PAGE {idx}]")
+    if not parts:
+        return None
+    return "\n\n".join(parts)
+
 def _download_text_from_url(url: str, timeout: int = 180) -> str:
     r = requests.get(url, timeout=timeout)
     if r.status_code >= 300:
@@ -32,37 +75,9 @@ def _download_text_from_url(url: str, timeout: int = 180) -> str:
         pass
     return r.text
 
-
-def _reducto_result_to_text(pj: dict) -> Optional[str]:
-    """
-    Normalize Reducto's structured 'result.chunks' into a single text blob.
-    Prefers plain 'embed' (clean text), falls back to 'content'.
-    """
-    res = pj.get("result") or (pj.get("data") or {}).get("result")
-    if not isinstance(res, dict):
-        return None
-    chunks = res.get("chunks")
-    if not isinstance(chunks, list) or not chunks:
-        return None
-
-    parts: List[str] = []
-    for ch in chunks:
-        if not isinstance(ch, dict):
-            continue
-        piece = ch.get("embed") or ch.get("content")
-        if isinstance(piece, str) and piece.strip():
-            parts.append(piece.strip())
-
-    if not parts:
-        return None
-    # Separate sections to keep the LLM context readable.
-    return "\n\n---\n\n".join(parts)
-
-
 def _extract_text_from_payload(pj: dict) -> Optional[str]:
     """
-    Try all common places Reducto may put text, then fall back to result.chunks,
-    then to downloadable URLs.
+    Try inline fields; then page-marked chunks; then URL downloads.
     """
     # 1) Inline
     for k in ("markdown", "text", "content"):
@@ -78,12 +93,12 @@ def _extract_text_from_payload(pj: dict) -> Optional[str]:
             if isinstance(v, str) and v.strip():
                 return v
 
-    # 3) Structured chunks
-    v = _reducto_result_to_text(pj)
+    # 3) Structured chunks → page markers
+    v = _result_to_page_marked_text(pj)
     if v:
         return v
 
-    # 4) Downloadable URLs
+    # 4) Downloadable URLs (last resort)
     url_keys = ("markdown_url", "text_url", "content_url", "md_url", "result_url", "url")
     for k in url_keys:
         url = pj.get(k)
@@ -97,7 +112,6 @@ def _extract_text_from_payload(pj: dict) -> Optional[str]:
 
     return None
 
-
 def _poll_job_for_markdown(job_id: str, max_wait_s: int = 180) -> Optional[str]:
     """
     Poll a few likely job endpoints until text materializes.
@@ -109,7 +123,7 @@ def _poll_job_for_markdown(job_id: str, max_wait_s: int = 180) -> Optional[str]:
         f"{base}/jobs/{job_id}",
         f"{base}/job/{job_id}",
         f"{base}/parse/jobs/{job_id}",
-        f"{base}/results/{job_id}",   # <- important for some tenants
+        f"{base}/results/{job_id}",
     ]
     deadline = time.time() + max_wait_s
     while time.time() < deadline:
@@ -137,14 +151,23 @@ def _poll_job_for_markdown(job_id: str, max_wait_s: int = 180) -> Optional[str]:
         time.sleep(2)
     return None
 
-
-def pdf_to_markdown(pdf_path: Union[str, Path]) -> str:
+def pdf_to_markdown(
+    pdf_path: Union[str, Path],
+    *,
+    log_payload: bool = False,
+    return_meta: bool = False,
+) -> Union[str, Tuple[str, dict]]:
     """
     Robust Reducto flow:
       1) POST /upload  -> returns document_url or file_id (reducto://...)
       2) POST /parse   -> asks for markdown/text; normalize any response shape
       3) If needed, poll job endpoints or try /extract
-    Returns a single large text string ready for LLM input.
+
+    Returns:
+      - markdown string (default), or
+      - (markdown, full_json) when return_meta=True
+
+    If log_payload=True, pretty-prints the full Reducto JSON to logs.
     """
     if not (settings.REDUCTO_API_KEY and settings.REDUCTO_BASE_URL):
         raise HTTPException(status_code=500, detail="Reducto not configured (REDUCTO_API_KEY/REDUCTO_BASE_URL).")
@@ -221,27 +244,45 @@ def pdf_to_markdown(pdf_path: Union[str, Path]) -> str:
     if p_resp.status_code >= 300:
         raise HTTPException(status_code=502, detail=f"Reducto parse failed: {p_resp.status_code} — {p_resp.text}")
 
-    # Normalize response into a single string
+    # --- Normalize response into JSON (pj) ---
     try:
         pj = p_resp.json()
     except Exception:
+        # Fallback: treat body as text
         txt = p_resp.text
         if txt and txt.strip():
             logger.info("Reducto Conversion Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
-            return txt
+            return (txt, {"raw": txt}) if return_meta else txt
         raise HTTPException(status_code=502, detail="Reducto parse returned an empty body.")
 
+    # Optional compact summary
+    _log_reducto_summary(pj)
+
+    # Optional full payload logging
+    if log_payload:
+        try:
+            logger.info("Reducto full response:\n%s", json.dumps(pj, indent=2, ensure_ascii=False))
+        except Exception:
+            logger.info("Reducto full response (non-JSON)")
+
+    # Build page-marked text
     txt = _extract_text_from_payload(pj)
     if txt:
-        logger.info("Reducto Conversion Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
-        return txt
+        usage = pj.get("usage") or (pj.get("data") or {}).get("usage") or {}
+        logger.info(
+            "Reducto Conversion Finished (pages=%s, credits=%s)",
+            usage.get("num_pages"), usage.get("credits"),
+            extra={"job_id": "-", "broker_id": "-", "employer_id": "-"},
+        )
+        return (txt, pj) if return_meta else txt
 
+    # --- If only a job handle was returned, poll for completion ---
     job_id = pj.get("job_id") or (pj.get("data") or {}).get("job_id")
     if job_id:
         txt2 = _poll_job_for_markdown(job_id, max_wait_s=180)
         if txt2:
             logger.info("Reducto Conversion Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
-            return txt2
+            return (txt2, pj) if return_meta else txt2
 
     # --- Step 3: fallback to /extract if tenant requires it ---
     try:
@@ -252,13 +293,13 @@ def pdf_to_markdown(pdf_path: Union[str, Path]) -> str:
         if ex_resp.status_code < 300:
             try:
                 exj = ex_resp.json()
+                txt3 = _extract_text_from_payload(exj)
             except Exception:
                 txt3 = ex_resp.text
-            else:
-                txt3 = _extract_text_from_payload(exj)
+                exj = {"raw": txt3}
             if txt3 and txt3.strip():
                 logger.info("Reducto Conversion Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
-                return txt3
+                return (txt3, exj) if return_meta else txt3
     except Exception:
         pass
 

@@ -61,7 +61,13 @@ def run_pipeline(
     pdf_path = _maybe_pdf(input_path)
     logger.info("File normalization finished (PDF ready)", extra=base_extra)
 
-    markdown = reducto.pdf_to_markdown(pdf_path)
+    # app/processing/pipeline.py
+    markdown, red_meta = reducto.pdf_to_markdown(pdf_path, log_payload=True, return_meta=True)
+    # (The full JSON is already logged. You can also log a summary if you want:)
+    logger.info("Reducto usage: pages=%s credits=%s", 
+                (red_meta.get("usage") or {}).get("num_pages"),
+                (red_meta.get("usage") or {}).get("credits"))
+
     token_count = token_counter.count_tokens_google(markdown)
     if token_count > settings.TOKEN_HARD_LIMIT:
         logger.warning("Token limit exceeded: %s", token_count, extra=base_extra)

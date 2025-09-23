@@ -48,6 +48,6 @@ def run_plan_identification(
         system_text="You are a precise, deterministic parser. Output only <index>::Plans::<LOC>::<Plan Name>::$0.00::<page_ref> lines.",
     )
 
-    out = chat_completion(messages, temperature=0.0, return_full=False, log_label="plan_identification")
+    out = chat_completion(messages, return_full=False, log_label="plan_identification")
     logger.info("Plan Identification Finished", extra={"job_id": "-", "broker_id": "-", "employer_id": "-"})
     return out

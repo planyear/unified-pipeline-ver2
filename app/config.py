@@ -18,6 +18,7 @@ class Settings:
     VELLUM_BASE_URL: str = os.getenv("VELLUM_BASE_URL", "https://api.vellum.ai")
     GOOGLE_API_KEY: str | None = os.getenv("GOOGLE_API_KEY")
     OPENROUTER_MODEL: str = os.getenv("MODEL_ID")
+    OPENROUTER_PRESET: str | None = os.getenv("OPENROUTER_PRESET")
     TOKEN_HARD_LIMIT: int = int(os.getenv("TOKEN_HARD_LIMIT", "50000"))
     LOG_PROMPTS=False
 

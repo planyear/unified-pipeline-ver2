@@ -34,6 +34,6 @@ def run_key_param_extractor(markdown_text: str, loc: str, cache: bool = True) ->
         enable_cache=cache,
         system_text="You are a precise benefits-document extraction assistant.",
     )
-    out = chat_completion(messages, temperature=0.0, return_full=False, log_label=f"key_params::{loc}")
+    out = chat_completion(messages, return_full=False, log_label=f"key_params::{loc}")
     logger.info("Key Params Finished for LOC=%s", loc, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
     return out

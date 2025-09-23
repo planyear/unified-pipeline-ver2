@@ -38,6 +38,6 @@ def run_per_plan_extraction(markdown_text: str, loc: str, plan_name: str, cache:
         enable_cache=cache,
         system_text="You are a precise, deterministic parser. Return ONLY the extraction text for this plan. No extra commentary.",
     )
-    out = chat_completion(messages, temperature=0.0, return_full=False, log_label=f"per_plan::{loc}::{plan_name}")
+    out = chat_completion(messages, return_full=False, log_label=f"per_plan::{loc}::{plan_name}")
     logger.info("Per-plan extraction finished for %s / %s", loc, plan_name, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
     return out

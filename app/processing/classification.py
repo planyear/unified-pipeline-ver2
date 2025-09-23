@@ -15,6 +15,6 @@ def run_classification(markdown_text: str, cache: bool = True) -> str:
         enable_cache=cache,
         system_text="You are a precise benefits-document extraction assistant.",
     )
-    out = chat_completion(messages, temperature=0.0, return_full=False, log_label="classification")
+    out = chat_completion(messages, return_full=False, log_label="classification")
     logger.info("Classification Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
     return out
