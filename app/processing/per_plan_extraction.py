@@ -1,6 +1,8 @@
+# app/processing/per_plan_extraction.py
 import logging
 from typing import Dict
-from ..services import vellum, llm
+from ..services import vellum
+from ..services.llm import compose_messages_with_document, chat_completion
 
 logger = logging.getLogger("pipeline")
 
@@ -19,36 +21,23 @@ PROMPT_MAP: Dict[str, str] = {
     "VCI": "vol-critical-illness-generic-unified-refiner-reducto-v-7-0-variant-1",
 }
 
-def _inject_tag_once(prompt: str, open_tag: str, close_tag: str, content: str) -> str:
-    sentinel = f"{open_tag}{close_tag}"
-    if sentinel in prompt:
-        return prompt.replace(sentinel, f"{open_tag}{content}{close_tag}", 1)
-    return prompt
-
 def run_per_plan_extraction(markdown_text: str, loc: str, plan_name: str, cache: bool = True) -> str:
-    """
-    Fetch the correct per-LOC Vellum deployment and run it with the full document.
-    Inject the plan name if the template expects {{plan_name}} (or common variants).
-    """
     slug = PROMPT_MAP.get(loc, PROMPT_MAP["Medical"])
     prompt = vellum.get_prompt(slug)
     logger.info("Per-plan: fetched Vellum deployment (%s) for LOC=%s", slug, loc, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
 
-    used_prompt = _inject_tag_once(prompt, "<Document>", "</Document>", markdown_text)
-
-    replacements = ["{{plan_name}}", "{{PLAN_NAME}}", "<PlanName></PlanName>", "<Plan Name></Plan Name>"]
-    for token in replacements:
-        if token in used_prompt:
-            if token.startswith("{{"):
-                used_prompt = used_prompt.replace(token, plan_name)
-            else:
-                used_prompt = used_prompt.replace(token, f"<PlanName>{plan_name}</PlanName>")
+    # inject plan name ONLY; never touch the doc
+    for token in ("{{plan_name}}", "{{PLAN_NAME}}", "<PlanName></PlanName>", "<Plan Name></Plan Name>"):
+        if token in prompt:
+            prompt = prompt.replace(token, plan_name if token.startswith("{{") else f"<PlanName>{plan_name}</PlanName>")
             break
 
-    system = (
-        "You are a precise, deterministic parser. Return ONLY the extraction text for this plan. "
-        "No explanations, no extra commentary."
+    messages = compose_messages_with_document(
+        template=prompt,
+        document_md=markdown_text,
+        enable_cache=cache,
+        system_text="You are a precise, deterministic parser. Return ONLY the extraction text for this plan. No extra commentary.",
     )
-    out = llm.run_prompt_with_context(markdown_text, used_prompt, cache=cache)
+    out = chat_completion(messages, temperature=0.0, return_full=False, log_label=f"per_plan::{loc}::{plan_name}")
     logger.info("Per-plan extraction finished for %s / %s", loc, plan_name, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
     return out

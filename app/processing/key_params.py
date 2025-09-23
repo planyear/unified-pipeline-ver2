@@ -1,6 +1,8 @@
+# app/processing/key_params.py
 import logging
 from typing import Dict
-from ..services import vellum, llm
+from ..services import vellum
+from ..services.llm import compose_messages_with_document, chat_completion
 
 logger = logging.getLogger("pipeline")
 
@@ -20,13 +22,18 @@ KEY_PARAMETER_PROMPT_MAP: Dict[str, str] = {
 }
 
 def run_key_param_extractor(markdown_text: str, loc: str, cache: bool = True) -> str:
-    # Normalize keys (e.g., 'Life' vs 'LifeADD'); prefer exact keys present in map
     slug = KEY_PARAMETER_PROMPT_MAP.get(loc)
     if not slug:
         logger.warning("Key Params: no Vellum deployment for LOC=%s; skipping", loc, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
         return ""
     prompt = vellum.get_prompt(slug)
-    logger.info("Key Params: fetched Vellum deployment (%s)", slug, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
-    out = llm.run_prompt_with_context(markdown_text, prompt, cache=cache)
+    logger.info("Key Params: fetched Vellum deployment (%s) for LOC=%s", slug, loc, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
+    messages = compose_messages_with_document(
+        template=prompt,
+        document_md=markdown_text,
+        enable_cache=cache,
+        system_text="You are a precise benefits-document extraction assistant.",
+    )
+    out = chat_completion(messages, temperature=0.0, return_full=False, log_label=f"key_params::{loc}")
     logger.info("Key Params Finished for LOC=%s", loc, extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
     return out

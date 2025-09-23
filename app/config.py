@@ -19,5 +19,6 @@ class Settings:
     GOOGLE_API_KEY: str | None = os.getenv("GOOGLE_API_KEY")
     OPENROUTER_MODEL: str = os.getenv("MODEL_ID")
     TOKEN_HARD_LIMIT: int = int(os.getenv("TOKEN_HARD_LIMIT", "50000"))
+    LOG_PROMPTS=False
 
 settings = Settings()

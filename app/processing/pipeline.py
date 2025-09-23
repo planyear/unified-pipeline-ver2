@@ -58,7 +58,6 @@ def run_pipeline(
     base_extra = {"job_id": job_id, "broker_id": broker_id, "employer_id": employer_id}
     logger.info("Pipeline: Start (prompt_cache=%s)", prompt_cache, extra=base_extra)
 
-    logger.info("Pipeline: Start", extra=base_extra)
     pdf_path = _maybe_pdf(input_path)
     logger.info("File normalization finished (PDF ready)", extra=base_extra)
 
@@ -78,7 +77,7 @@ def run_pipeline(
         }
 
     # Step 6: classification
-    classification_out = clf.run_classification(markdown)
+    classification_out = clf.run_classification(markdown, cache=prompt_cache)
 
     # Special SBC handling
     if "Basic Info::Document Type::SBC" in classification_out:
@@ -146,9 +145,7 @@ def run_pipeline(
     for loc in locs:
         key_param_outputs[loc] = kp.run_key_param_extractor(markdown, loc, cache=prompt_cache)
 
-    step7_joined = "\n\n".join(
-        [key_param_outputs[loc] for loc in selected.keys() if key_param_outputs[loc]]
-    )
+    step7_joined = "\n\n".join(v for v in key_param_outputs.values() if v)
 
     # --- Plan Identification (per-LOC for Auto-Read; single run otherwise) ---
     plan_id_output = ""      # for API response
@@ -160,7 +157,7 @@ def run_pipeline(
         for loc in locs:  # 'locs' is from parse_line_of_coverage(classification_out)
             step7_loc = key_param_outputs.get(loc, "")
             out_loc = pid.run_plan_identification(
-                markdown, classification_out, step7_loc, [loc], cache=prompt_cache  # <-- pass [loc]
+                markdown, classification_out, step7_loc, [loc], cache=prompt_cache
             )
             pid_outputs.append(f"### {loc}\n{out_loc}")
 
@@ -297,7 +294,7 @@ def run_pipeline(
     total_plans = sum(len(v) for v in selected.values())
     logger.info("Total plans to process: %d", total_plans, extra=base_extra)
 
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=500) as ex:
         futs = []
         for loc, plans in selected.items():
             for (plan, pages) in plans:
