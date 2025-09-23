@@ -10,7 +10,7 @@ PROMPT_MAP: Dict[str, str] = {
     "Medical": "medical-unified-refiner-v-5-0-variant-1",
     "Dental": "dental-unified-refiner-v-3-0-variant-1",
     "Vision": "vision-unified-refiner-v-3-0-variant-1",
-    "LifeADD": "life-add-life-add-unified-refiner-v-2-0-variant-1",
+    "LifeADD": "vol-life-and-add-generic-unified-refiner-reducto-v-7-0-variant-1",
     "STD": "std-unified-refiner-v-3-0-variant-1",
     "LTD": "ltd-unified-refiner-v-3-0-variant-1",
     "VL": "vol-life-and-add-generic-unified-refiner-reducto-v-7-0-variant-1",
