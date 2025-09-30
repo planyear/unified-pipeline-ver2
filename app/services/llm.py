@@ -2,10 +2,25 @@
 import os, json, time, hashlib, logging, requests
 from typing import List, Dict, Any, Optional
 from ..config import settings
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger("pipeline")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+_session = requests.Session()
+_retries = Retry(
+    total=4,
+    connect=4,
+    read=4,
+    backoff_factor=0.6,  # 0.6, 1.2, 2.4, 4.8s
+    status_forcelist=(408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526),
+    allowed_methods=frozenset(["POST"]),
+    raise_on_status=False,
+)
+_adapter = HTTPAdapter(max_retries=_retries, pool_connections=20, pool_maxsize=50)
+_session.mount("https://", _adapter)
+_session.mount("http://", _adapter)
 
 def _headers() -> Dict[str, str]:
     return {
@@ -170,32 +185,34 @@ def chat_completion(
 
     # Optional: debug payload size & cache fingerprints
     try:
-        user_content = next((m.get("content", []) for m in messages if m.get("role") == "user"), [])
-        approx_chars = sum(len(c.get("text", "")) for c in user_content if isinstance(c, dict))
-        hashes = [
-            hashlib.sha256((c.get("text") or "").encode("utf-8")).hexdigest()[:16]
-            for c in user_content
-            if isinstance(c, dict) and c.get("cache_control")
-        ]
-        logger.info(
-            "LLM payload approx chars=%s cache_parts=%s %s",
-            approx_chars, ",".join(hashes) or "-",
-            f"({log_label})" if log_label else ""
-        )
-    except Exception:
-        pass
+        r = _session.post(OPENROUTER_URL, headers=_headers(), json=body, timeout=180)
+    except requests.RequestException as e:
+        logger.error("OpenRouter network error: %s", e)
+        raise
 
-    r = requests.post(OPENROUTER_URL, headers=_headers(), json=body, timeout=180)
+    # If HTTP status is an error, log snippet and raise
     if r.status_code >= 400:
-        # log server error text before raising
-        try:
-            logger.error("OpenRouter error %s %s | %s", r.status_code, r.reason, r.text)
-        except Exception:
-            pass
-        raise requests.HTTPError(f"{r.status_code} {r.reason}: {r.text}", response=r)
+        snippet = (r.text or "")[:1200]
+        logger.error("OpenRouter HTTP %s %s | %s", r.status_code, r.reason, snippet)
+        raise requests.HTTPError(f"{r.status_code} {r.reason}: {snippet}", response=r)
 
-    out = r.json()
+    # Validate content-type looks like JSON
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    if "application/json" not in ctype:
+        snippet = (r.text or "")[:1200]
+        logger.error("OpenRouter non-JSON response (Content-Type=%s): %s", ctype, snippet)
+        raise requests.HTTPError(f"Non-JSON response from OpenRouter: {ctype}", response=r)
+
+    # Parse JSON safely
+    try:
+        out = r.json()
+    except ValueError:
+        snippet = (r.text or "")[:1200]
+        logger.error("OpenRouter JSON decode failed. Body snippet:\n%s", snippet)
+        raise requests.HTTPError("Failed to decode OpenRouter JSON response", response=r)
+
     _log_usage(out, r.headers)
+
     if return_full:
         return out
     return out["choices"][0]["message"]["content"]

@@ -295,7 +295,7 @@ def run_pipeline(
     total_plans = sum(len(v) for v in selected.values())
     logger.info("Total plans to process: %d", total_plans, extra=base_extra)
 
-    with ThreadPoolExecutor(max_workers=500) as ex:
+    with ThreadPoolExecutor(max_workers=10) as ex:
         futs = []
         for loc, plans in selected.items():
             for (plan, pages) in plans:
