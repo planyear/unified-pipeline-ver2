@@ -52,7 +52,7 @@ def require_user(domain_enforced: bool = True):
 
 # ----------------- App & Middleware -----------------
 app = FastAPI(
-    title="PlanYear Unified Pipeline",
+    title="Unified Pipeline",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
