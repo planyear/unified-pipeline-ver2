@@ -61,8 +61,7 @@ def run_pipeline(
     pdf_path = _maybe_pdf(input_path)
     logger.info("File normalization finished (PDF ready)", extra=base_extra)
 
-    # app/processing/pipeline.py
-    markdown, red_meta = reducto.pdf_to_markdown(pdf_path, log_payload=True, return_meta=True)
+    markdown, red_meta = reducto.pdf_to_markdown(pdf_path, return_meta=True)
     # (The full JSON is already logged. You can also log a summary if you want:)
     logger.info("Reducto usage: pages=%s credits=%s", 
                 (red_meta.get("usage") or {}).get("num_pages"),

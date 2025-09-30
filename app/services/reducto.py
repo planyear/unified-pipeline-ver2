@@ -1,6 +1,5 @@
 # app/services/reducto.py
 import time
-import json
 import logging
 from pathlib import Path
 from typing import Optional, Union, List, Tuple
@@ -34,6 +33,7 @@ def _result_to_page_marked_text(pj: dict) -> Optional[str]:
       [START OF PAGE 1]
       ...page text...
       [END OF PAGE 1]
+
     Assumes chunking by page. Uses 'embed' first, then 'content'.
     """
     res = pj.get("result") or (pj.get("data") or {}).get("result")
@@ -43,7 +43,7 @@ def _result_to_page_marked_text(pj: dict) -> Optional[str]:
     if not isinstance(chunks, list) or not chunks:
         return None
 
-    parts = []
+    parts: List[str] = []
     for idx, ch in enumerate(chunks, start=1):
         if not isinstance(ch, dict):
             continue
@@ -77,26 +77,26 @@ def _download_text_from_url(url: str, timeout: int = 180) -> str:
 
 def _extract_text_from_payload(pj: dict) -> Optional[str]:
     """
-    Try inline fields; then page-marked chunks; then URL downloads.
+    Prefer page-marked chunks; then inline fields; then URL downloads.
     """
-    # 1) Inline
-    for k in ("markdown", "text", "content"):
-        v = pj.get(k)
-        if isinstance(v, str) and v.strip():
-            return v
-
-    # 2) Nested (data.*)
-    data = pj.get("data")
-    if isinstance(data, dict):
-        for k in ("markdown", "text", "content"):
-            v = data.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-
-    # 3) Structured chunks → page markers
+    # 1) Structured chunks → page markers (PREFERRED)
     v = _result_to_page_marked_text(pj)
     if v:
         return v
+
+    # 2) Inline
+    for k in ("markdown", "text", "content"):
+        v2 = pj.get(k)
+        if isinstance(v2, str) and v2.strip():
+            return v2
+
+    # 3) Nested (data.*)
+    data = pj.get("data")
+    if isinstance(data, dict):
+        for k in ("markdown", "text", "content"):
+            v3 = data.get(k)
+            if isinstance(v3, str) and v3.strip():
+                return v3
 
     # 4) Downloadable URLs (last resort)
     url_keys = ("markdown_url", "text_url", "content_url", "md_url", "result_url", "url")
@@ -154,20 +154,16 @@ def _poll_job_for_markdown(job_id: str, max_wait_s: int = 180) -> Optional[str]:
 def pdf_to_markdown(
     pdf_path: Union[str, Path],
     *,
-    log_payload: bool = False,
-    return_meta: bool = False,
+    log_content: bool = False,     # if True, log the page-marked content (not the raw JSON)
+    return_meta: bool = False,     # if True, return (text, full_json)
 ) -> Union[str, Tuple[str, dict]]:
     """
-    Robust Reducto flow:
-      1) POST /upload  -> returns document_url or file_id (reducto://...)
-      2) POST /parse   -> asks for markdown/text; normalize any response shape
-      3) If needed, poll job endpoints or try /extract
+    Robust Reducto flow that returns a single page-marked text string.
 
-    Returns:
-      - markdown string (default), or
-      - (markdown, full_json) when return_meta=True
-
-    If log_payload=True, pretty-prints the full Reducto JSON to logs.
+    Logging behavior:
+      • Always logs a compact usage summary (job_id, duration, pages, credits)
+      • Never logs the full JSON payload
+      • Optionally logs the final page-marked CONTENT when log_content=True
     """
     if not (settings.REDUCTO_API_KEY and settings.REDUCTO_BASE_URL):
         raise HTTPException(status_code=500, detail="Reducto not configured (REDUCTO_API_KEY/REDUCTO_BASE_URL).")
@@ -194,7 +190,6 @@ def pdf_to_markdown(
     except Exception:
         up_json = {}
 
-    # Prefer document_url; accept file_id (reducto://...pdf) as a handle.
     document_url = (
         up_json.get("document_url")
         or up_json.get("url")
@@ -244,28 +239,20 @@ def pdf_to_markdown(
     if p_resp.status_code >= 300:
         raise HTTPException(status_code=502, detail=f"Reducto parse failed: {p_resp.status_code} — {p_resp.text}")
 
-    # --- Normalize response into JSON (pj) ---
+    # Normalize to JSON
     try:
         pj = p_resp.json()
     except Exception:
-        # Fallback: treat body as text
-        txt = p_resp.text
-        if txt and txt.strip():
+        txt = p_resp.text.strip()
+        if txt:
             logger.info("Reducto Conversion Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
             return (txt, {"raw": txt}) if return_meta else txt
         raise HTTPException(status_code=502, detail="Reducto parse returned an empty body.")
 
-    # Optional compact summary
+    # Compact usage summary only
     _log_reducto_summary(pj)
 
-    # Optional full payload logging
-    if log_payload:
-        try:
-            logger.info("Reducto full response:\n%s", json.dumps(pj, indent=2, ensure_ascii=False))
-        except Exception:
-            logger.info("Reducto full response (non-JSON)")
-
-    # Build page-marked text
+    # Build page-marked text (preferred)
     txt = _extract_text_from_payload(pj)
     if txt:
         usage = pj.get("usage") or (pj.get("data") or {}).get("usage") or {}
@@ -274,17 +261,21 @@ def pdf_to_markdown(
             usage.get("num_pages"), usage.get("credits"),
             extra={"job_id": "-", "broker_id": "-", "employer_id": "-"},
         )
+        if log_content:
+            logger.info("Reducto CONTENT (page-marked):\n%s", txt)
         return (txt, pj) if return_meta else txt
 
-    # --- If only a job handle was returned, poll for completion ---
+    # If only a job handle returned, poll
     job_id = pj.get("job_id") or (pj.get("data") or {}).get("job_id")
     if job_id:
         txt2 = _poll_job_for_markdown(job_id, max_wait_s=180)
         if txt2:
             logger.info("Reducto Conversion Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
+            if log_content:
+                logger.info("Reducto CONTENT (page-marked):\n%s", txt2)
             return (txt2, pj) if return_meta else txt2
 
-    # --- Step 3: fallback to /extract if tenant requires it ---
+    # --- Fallback to /extract ---
     try:
         extract_url = f"{settings.REDUCTO_BASE_URL}/extract"
         ex_headers = {"Authorization": f"Bearer {settings.REDUCTO_API_KEY}", "Content-Type": "application/json"}
@@ -299,11 +290,13 @@ def pdf_to_markdown(
                 exj = {"raw": txt3}
             if txt3 and txt3.strip():
                 logger.info("Reducto Conversion Finished", extra={"job_id":"-", "broker_id":"-", "employer_id":"-"})
+                if log_content:
+                    logger.info("Reducto CONTENT (page-marked):\n%s", txt3)
                 return (txt3, exj) if return_meta else txt3
     except Exception:
         pass
 
     raise HTTPException(
         status_code=502,
-        detail=f"Reducto parse returned no markdown/text. Body: {str(pj)[:400]}",
+        detail="Reducto parse returned no markdown/text.",
     )
