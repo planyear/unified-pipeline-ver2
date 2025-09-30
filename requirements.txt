@@ -4,3 +4,7 @@ requests
 python-multipart
 pydantic
 google-generativeai
+uvicorn[standard]
+authlib
+itsdangerous
+httpx
