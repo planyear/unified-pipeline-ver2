@@ -59,27 +59,26 @@ def compose_messages_with_document(
     extra_user_texts: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     extra_user_texts = extra_user_texts or []
-
-    # strip placeholder if present so we don't send an empty text block
     template_no_slot = (template or "").replace("<Document></Document>", "")
 
+    # Build cacheable doc part
     doc_part = build_cachable_doc_part(document_md, enable_cache=enable_cache)
 
-    user_content: List[Dict[str, Any]] = []
-    maybe_tpl = _maybe_text_part(template_no_slot)
-    if maybe_tpl:
-        user_content.append(maybe_tpl)
-    user_content.append(doc_part)
+    # ——— The critical bit: put the doc FIRST ———
+    user_content: List[Dict[str, Any]] = [doc_part]
+
+    if template_no_slot.strip():
+        user_content.append({"type": "text", "text": template_no_slot.strip()})
+
     for txt in extra_user_texts:
-        maybe_extra = _maybe_text_part(txt)
-        if maybe_extra:
-            user_content.append(maybe_extra)
+        if txt and txt.strip():
+            user_content.append({"type": "text", "text": txt.strip()})
 
     return [
-        {"role": "system", "content": [_maybe_text_part(system_text) or {"type": "text", "text": ""}]},
+        {"role": "system", "content": [{"type": "text", "text": system_text}]},
         {"role": "user", "content": user_content},
     ]
-
+    
 # ---------- prompt save ----------
 def _save_prompt(messages: List[Dict[str, Any]], label: str) -> None:
     if not getattr(settings, "LOG_PROMPTS", False):
@@ -173,13 +172,15 @@ def chat_completion(
     log_label: Optional[str] = None,
 ):
     body: Dict[str, Any] = {
-        "model": settings.OPENROUTER_MODEL,   # may be overridden by _apply_preset_to_body
+        "model": settings.OPENROUTER_MODEL,
         "messages": messages,
         "usage": {"include": True},
     }
 
-    _apply_preset_to_body(body)               # <— preset defines params like temperature, top_p, max_tokens
+    _apply_preset_to_body(body)
 
+    body["provider"] = {"order": ["Anthropic"], "allow_fallbacks": False}
+    
     if request_overrides:
         body.update(request_overrides)
 

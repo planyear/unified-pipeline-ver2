@@ -101,8 +101,8 @@ def run_pipeline(
 
     # Option narrowing (build a working set of {loc: [plans...]})
     selected: Dict[str, List[Tuple[str, List[int]]]] = {}
-    need_pid_search = False            # <— NEW
-    initial_search_match = None        # <— NEW
+    need_pid_search = False
+    initial_search_match = None
 
     if option == "Auto-Read":
         for loc in locs:
@@ -142,9 +142,18 @@ def run_pipeline(
     logger.info("Selected plans per LOC prepared", extra=base_extra)
 
     # Key Parameter Extraction per LOC
+    # ---------------------------------------------------------
+    # NEW: pass plan names for this LOC so <Plan_Name_List> can be injected
     key_param_outputs: Dict[str, str] = {}
     for loc in locs:
-        key_param_outputs[loc] = kp.run_key_param_extractor(markdown, loc, cache=prompt_cache)
+        names_for_loc = [p for (p, _pg) in plan_listing.get(loc, [])]
+        key_param_outputs[loc] = kp.run_key_param_extractor(
+            markdown,
+            loc,
+            plan_names_for_loc=names_for_loc,  # <-- added
+            cache=prompt_cache,
+        )
+    # ---------------------------------------------------------
 
     step7_joined = "\n\n".join(v for v in key_param_outputs.values() if v)
 
