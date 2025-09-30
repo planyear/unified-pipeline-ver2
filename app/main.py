@@ -38,7 +38,7 @@ class ProcessRequest(BaseModel):
     plan_name: Optional[str] = ""
     prompt_cache: bool = True
 
-# ------------------------ Sync endpoint (existing) -------------------
+# Synchronous processing. May hit Cloudflare 502 timeouts.
 @app.post("/v1/process")
 async def process_document(
     document: UploadFile = File(...),
@@ -49,10 +49,6 @@ async def process_document(
     plan_name: Optional[str] = Form(None),
     prompt_cache: bool = Form(True),
 ):
-    """
-    Synchronous processing. This can hit Cloudflare timeouts for large jobs.
-    Prefer /v1/process_async in production.
-    """
     extra = {"job_id": job_id, "broker_id": broker_id, "employer_id": employer_id}
 
     if option.value == "Search" and not (plan_name and plan_name.strip()):
@@ -76,7 +72,7 @@ async def process_document(
         logger.exception("Unhandled error", extra=extra)
         raise HTTPException(status_code=500, detail=str(e))
 
-# ------------------------ Async + polling endpoints ------------------
+# Asynchronous processing. Returns 202 + job_id immediately; poll /v1/jobs/{job_id}. Use this to avoid Cloudflare 520 timeouts.
 @app.post("/v1/process_async")
 async def process_document_async(
     background: BackgroundTasks,
@@ -88,10 +84,6 @@ async def process_document_async(
     plan_name: Optional[str] = Form(None),
     prompt_cache: bool = Form(True),
 ):
-    """
-    Asynchronous processing. Returns 202 + job_id immediately; poll /v1/jobs/{job_id}.
-    Use this to avoid Cloudflare 520 timeouts on long jobs.
-    """
     if option.value == "Search" and not (plan_name and plan_name.strip()):
         raise HTTPException(status_code=422, detail="plan_name is required when option == 'Search'.")
 
@@ -127,5 +119,4 @@ async def get_job_status(rid: str):
     data = JOBS.get(rid)
     if not data:
         return JSONResponse({"message": "not found"}, status_code=404)
-    # For big results you might want to omit the payload until done
     return JSONResponse(data, status_code=200)

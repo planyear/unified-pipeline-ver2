@@ -20,6 +20,6 @@ class Settings:
     OPENROUTER_MODEL: str = os.getenv("MODEL_ID")
     OPENROUTER_PRESET: str | None = os.getenv("OPENROUTER_PRESET")
     TOKEN_HARD_LIMIT: int = int(os.getenv("TOKEN_HARD_LIMIT", "50000"))
-    LOG_PROMPTS=False
+    LOG_PROMPTS=True
 
 settings = Settings()
