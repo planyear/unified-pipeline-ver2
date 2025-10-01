@@ -204,3 +204,4 @@ async def get_job_status(rid: str, user=Depends(require_user())):
     if not data:
         return JSONResponse({"message": "not found"}, status_code=404)
     return JSONResponse(data, status_code=200)
+
